@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+*.log
+.venv/
+.env
+.claude/
+/examples/training_data/
+/examples/inference_data/
+/examples/bkm_results/

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bkm"
+version = "0.0.0"
+description = "BKM (Best Known Method) DAG generator for wafer process flows"
+readme = "README_PYPI.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "yRocket" }]
+keywords = ["bkm", "wafer", "semiconductor", "dag", "process-flow"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "pandas>=1.5",
+    "networkx>=2.8",
+    "tqdm>=4.60",
+    "pyarrow>=10.0",
+]
+
+[project.optional-dependencies]
+viz = ["graphviz>=0.20"]
+
+[project.scripts]
+bkm-generator = "bkm.generator:main"
+
+[project.urls]
+Homepage = "https://github.com/ykim2718/BestKnownMethods"
+Issues   = "https://github.com/ykim2718/BestKnownMethods/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]

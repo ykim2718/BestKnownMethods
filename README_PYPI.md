@@ -85,7 +85,7 @@ Full documentation — `BKM` class internals, edge inference algorithm, `bkm.gen
 
 **https://github.com/ykim2718/BestKnownMethods**
 
-The repo also ships `bkm.md`, `generator.md`, and a 4-script `examples/` demo.
+The repo also ships a 4-script `examples/` demo.
 
 ## Links
 

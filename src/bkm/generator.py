@@ -95,17 +95,75 @@ def build_wafers_index(*, folder: Path, max_file_count: int = 0) -> pd.DataFrame
 
 
 def add_bkm_loaf(*, folder: Path, parquet_file: str, columns: List[str]) -> pd.DataFrame:
-    """Read a wafer parquet and return only the unique process steps.
+    """Read a wafer parquet and collapse it into a single 'loaf' row.
 
-    Reads only the minimal columns needed, then creates:
+    Reads only the minimal columns needed, then constructs:
       - 'loaf' column: values from each column in ``columns`` (in the given
         order) joined by '+' — e.g. with ``columns=['equipment','chamber']``,
         loaf would be ``"eq1+eq2+ch1+ch2"`` (equipment values first, then
         chamber). The order of ``columns`` is preserved as the user specified
         it: a different ordering produces a different loaf string.
-      - 'tkin_time' column: tkout_time - 60 minutes
+      - 'tkin_time' column: tkout_time - 60 minutes (synthesized).
 
-    Returns only unique (wafer_id, loaf, tkin_time, tkout_time) rows.
+    Args:
+        folder: Folder containing the parquet file.
+        parquet_file: Filename of the parquet (relative to ``folder``).
+        columns: Source columns whose unique sorted values are concatenated
+            to form the loaf. Order is preserved verbatim.
+
+    Returns:
+        Always a 1-row, 4-column DataFrame.
+
+        Shape:   (1, 4)
+        Index:   RangeIndex([0])  — single row, integer 0 (after reset_index)
+        Columns: ['wafer_id', 'tkin_time', 'tkout_time', 'loaf']
+
+        | Column      | dtype                        | Source                                          |
+        |-------------|------------------------------|-------------------------------------------------|
+        | wafer_id    | object (str)                 | First value of input wafer_id column            |
+        | tkin_time   | object (str: YYYY-MM-DD ...) | tkout_time - 60 min, formatted via strftime     |
+        | tkout_time  | datetime64[ns] (from parquet)| Single representative value from input          |
+        | loaf        | object (str)                 | '+'.join(sorted_unique values, per column order)|
+
+    Example:
+        Input parquet ``LOT01_W01.parquet`` (2 rows):
+
+            wafer_id   equipment  chamber  chamber_step  sensor  tkout_time
+            LOT01_W01  eq1        ch1      cs1           se1     2025-08-01 09:00:00
+            LOT01_W01  eq2        ch2      cs2           se2     2025-08-01 09:00:00
+
+        Call:
+
+            add_bkm_loaf(
+                folder=Path("training_data"),
+                parquet_file="LOT01_W01.parquet",
+                columns=["equipment", "chamber", "chamber_step", "sensor"],
+            )
+
+        Returned DataFrame:
+
+               wafer_id     tkin_time             tkout_time            loaf
+            0  LOT01_W01    2025-08-01 08:00:00   2025-08-01 09:00:00   eq1+eq2+ch1+ch2+cs1+cs2+se1+se2
+
+        How the loaf string was built (one bucket per column, order preserved):
+
+            equipment    -> sorted unique: ['eq1', 'eq2']
+            chamber      -> sorted unique: ['ch1', 'ch2']
+            chamber_step -> sorted unique: ['cs1', 'cs2']
+            sensor       -> sorted unique: ['se1', 'se2']
+
+            loaf = '+'.join(['eq1','eq2','ch1','ch2','cs1','cs2','se1','se2'])
+                 = 'eq1+eq2+ch1+ch2+cs1+cs2+se1+se2'
+
+        Reordering ``columns=['sensor','equipment','chamber_step','chamber']``
+        with the same input yields a *different* loaf and therefore a
+        different BKM identity:
+
+            loaf = 'se1+se2+eq1+eq2+cs1+cs2+ch1+ch2'
+
+    Raises:
+        AssertionError: If the parquet contains more than one distinct
+            ``wafer_id``.
     """
     core_columns: List[str] = [col_wafer_id, col_tkout_time]
     fpath: Path = folder / parquet_file

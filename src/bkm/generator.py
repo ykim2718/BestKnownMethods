@@ -94,36 +94,29 @@ def build_wafers_index(*, folder: Path, max_file_count: int = 0) -> pd.DataFrame
     return wafers
 
 
-def add_bkm_loaf(*, folder: Path, parquet_file: str, columns: List[str]) -> pd.DataFrame:
-    """Read a wafer parquet and collapse it into a single 'loaf' row.
+def add_bkm_loaf(*, folder: Path, parquet_file: str, columns: List[str]) -> Tuple[str, str]:
+    """Read a wafer parquet and compose its single loaf identifier.
 
-    Reads only the minimal columns needed, then constructs:
-      - 'loaf' column: values from each column in ``columns`` (in the given
-        order) joined by '+' — e.g. with ``columns=['equipment','chamber']``,
-        loaf would be ``"eq1+eq2+ch1+ch2"`` (equipment values first, then
-        chamber). The order of ``columns`` is preserved as the user specified
-        it: a different ordering produces a different loaf string.
-      - 'tkin_time' column: tkout_time - 60 minutes (synthesized).
+    A wafer's loaf is the concatenation of unique sorted values from each
+    column in ``columns`` (in the user-specified order), joined with '+'.
+    Two wafers with the same loaf belong to the same BKM in the CLI flow.
 
     Args:
         folder: Folder containing the parquet file.
         parquet_file: Filename of the parquet (relative to ``folder``).
         columns: Source columns whose unique sorted values are concatenated
-            to form the loaf. Order is preserved verbatim.
+            to form the loaf. Order is preserved verbatim — the same column
+            set in a different order produces a different loaf string and
+            therefore a different BKM identity.
 
     Returns:
-        Always a 1-row, 4-column DataFrame.
+        ``(wafer_id, loaf)`` — both strings.
 
-        Shape:   (1, 4)
-        Index:   RangeIndex([0])  — single row, integer 0 (after reset_index)
-        Columns: ['wafer_id', 'tkin_time', 'tkout_time', 'loaf']
-
-        | Column      | dtype                        | Source                                          |
-        |-------------|------------------------------|-------------------------------------------------|
-        | wafer_id    | object (str)                 | First value of input wafer_id column            |
-        | tkin_time   | object (str: YYYY-MM-DD ...) | tkout_time - 60 min, formatted via strftime     |
-        | tkout_time  | datetime64[ns] (from parquet)| Single representative value from input          |
-        | loaf        | object (str)                 | '+'.join(sorted_unique values, per column order)|
+        - ``wafer_id``: the wafer's identifier, taken from the first row of
+          the input parquet's ``wafer_id`` column.
+        - ``loaf``: the composed identifier string, built by walking
+          ``columns`` in order and joining each column's sorted unique
+          values with '+'.
 
     Example:
         Input parquet ``LOT01_W01.parquet`` (2 rows):
@@ -140,10 +133,9 @@ def add_bkm_loaf(*, folder: Path, parquet_file: str, columns: List[str]) -> pd.D
                 columns=["equipment", "chamber", "chamber_step", "sensor"],
             )
 
-        Returned DataFrame:
+        Returns:
 
-               wafer_id     tkin_time             tkout_time            loaf
-            0  LOT01_W01    2025-08-01 08:00:00   2025-08-01 09:00:00   eq1+eq2+ch1+ch2+cs1+cs2+se1+se2
+            ("LOT01_W01", "eq1+eq2+ch1+ch2+cs1+cs2+se1+se2")
 
         How the loaf string was built (one bucket per column, order preserved):
 
@@ -164,42 +156,33 @@ def add_bkm_loaf(*, folder: Path, parquet_file: str, columns: List[str]) -> pd.D
     Raises:
         AssertionError: If the parquet contains more than one distinct
             ``wafer_id``.
+
+    Notes:
+        Earlier versions returned a 1-row, 4-column DataFrame containing a
+        synthesized ``tkin_time`` column so that the result could be fed to
+        ``BKM.read_wafer_edges_from_df()`` for timing-based edge inference.
+        Because the CLI guarantees a 1-row collapse, that timing path was
+        never actually exercised — ``tkin_time`` was dead weight. The CLI
+        now constructs the trivial DAG ``in -> loaf -> out`` directly,
+        bypassing ``read_wafer_edges_from_df()`` entirely. Users who need
+        multi-row timing-based branch inference should call
+        ``BKM.read_wafer_edges_from_df()`` directly via the Python API.
     """
-    core_columns: List[str] = [col_wafer_id, col_tkout_time]
+    core_columns: List[str] = [col_wafer_id]
     fpath: Path = folder / parquet_file
     df: pd.DataFrame = pd.read_parquet(
         path=fpath, columns=sorted(set(columns + core_columns))
     )
-    a: List = []
-    for col in columns:
-        a.extend(sorted(df[col].unique()))
     if df[col_wafer_id].unique().size != 1:
         raise AssertionError(
             f"  [ERROR] Multiple wafer_id in {parquet_file}: {df[col_wafer_id].unique()}"
         )
-    if df[col_tkout_time].unique().size != 1:
-        message: str = (
-            f"  [ERROR] Multiple tkout_times in {parquet_file}: "
-            f"{df[col_tkout_time].unique()}"
-        )
-        if False:
-            raise AssertionError(message)
-        else:
-            a_counts = df[col_tkout_time].value_counts()
-            message += f": {a_counts.to_dict()}"
-            tkout_time = a_counts.idxmin()
-            df[col_tkout_time] = tkout_time
-            message += f"; take {tkout_time} as the representative"
-            print(message)
-    steps: pd.DataFrame = df.loc[[df.index[0]], [col_wafer_id, col_tkout_time]]
-    steps[col_tkin_time] = (
-        (pd.Timestamp(steps[col_tkout_time].iloc[0]) - pd.Timedelta(minutes=60))
-        .strftime("%Y-%m-%d %H:%M:%S")
-    )
-    steps[col_bkm_loaf] = '+'.join(map(str, a))
-    steps = steps[[col_wafer_id, col_tkin_time, col_tkout_time, col_bkm_loaf]]
-    assert steps.shape == (1, 4)
-    return steps.reset_index(drop=True)
+    a: List = []
+    for col in columns:
+        a.extend(sorted(df[col].unique()))
+    wafer_id: str = str(df[col_wafer_id].iloc[0])
+    loaf: str = '+'.join(map(str, a))
+    return wafer_id, loaf
 
 
 def extract_loaf_set(*, edges: List[Tuple[str, str]]) -> FrozenSet[str]:
@@ -309,7 +292,6 @@ def save_bkm_directory(
             "labels": {
                 "wafer_id": bkm.wafer_id_label,
                 "loaf": bkm.loaf_label,
-                "tkin_time": bkm.tkin_label,
                 "tkout_time": bkm.tkout_label,
             },
             "nodes": {},
@@ -472,7 +454,6 @@ def main() -> None:
     # -- 3. Loop through wafers, assign BKM versions --------------------------
     print("[3] Assigning BKM versions...")
     print(f"  BKM columns : {args.bkm_columns}")
-    bkm_reader: BKM = BKM(**label_kwargs)
 
     pbar = tqdm(wafers.index, desc="Processing", ncols=100, unit='parquet')
     for idx in pbar:
@@ -480,10 +461,11 @@ def main() -> None:
         pbar.set_description(
             f"Processing {wafers.at[idx, col_wafer_id]} ({parquet_file})")
 
-        steps_df: pd.DataFrame = add_bkm_loaf(
+        wf_id, loaf = add_bkm_loaf(
             folder=data_folder, parquet_file=parquet_file, columns=args.bkm_columns
         )
-        wf_id, edges, loaves = bkm_reader.read_wafer_edges_from_df(steps_df)
+        # CLI flow: one wafer -> one loaf -> trivial DAG  in -> loaf -> out
+        edges: List[Tuple[str, str]] = [("in", loaf), (loaf, "out")]
         bkm_ver: str = find_or_create_bkm(
             bkm_registry=bkm_registry,
             loaf_set_index=loaf_set_index,
@@ -493,7 +475,7 @@ def main() -> None:
         )
 
         wafers.at[idx, col_bkm] = bkm_ver
-        wafers.at[idx, col_n_loaves] = len(set(loaves))
+        wafers.at[idx, col_n_loaves] = 1
     print()
 
     # -- 4. Show wafers result -------------------------------------------------
